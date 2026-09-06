@@ -1,0 +1,4 @@
+interface:
+  display_name: "Configure CLIProxy Coding Agents"
+  short_description: "Safely connect coding CLIs through CLIProxyAPI"
+  default_prompt: "Use $configure-cliproxy-coding-agents to connect Claude Code and Copilot CLI to my local CLIProxyAPI gateway and verify model routing."

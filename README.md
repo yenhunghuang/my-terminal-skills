@@ -1,48 +1,31 @@
-# 🚀 My Terminal Skills Setup
+# My Terminal Skills
 
-一鍵設定 Claude Code 和 GitHub Copilot 的終端開發環境！
+個人 CLI coding agents 的共用指令、skills 與快捷指令。
 
-## 📦 包含內容
+## 最新：精簡 agent profile
 
-### Claude Skills (4 個)
-- **file-organizer** - 智慧檔案整理系統
-- **changelog-generator** - 自動生成 Changelog  
-- **document-skills** - 文件處理工具集
-- **ui-ux-pro-max** ⭐ (25,542⭐) - 專業 UI/UX 設計助手
+[agent-profile/](agent-profile/) 收錄目前使用的精簡版：
 
-### GitHub Copilot Customizations (4 個)
-- **conventional-commit** - 規範化 Git commit 訊息
-- **git-flow-branch-creator** - Git Flow 分支管理
-- **github-actions-expert** - GitHub Actions CI/CD 專家
-- **ci-cd-best-practices** - CI/CD 最佳實踐指南
+- [共用 AGENTS.md](agent-profile/AGENTS.md)：以任務需要決定流程，減少固定步驟、persona orchestration 和重複驗證。
+- [4 個 skills](agent-profile/skills/)：agent instruction refactor、CLIProxy coding agents、PDF、UI/UX。
+- [17 個 Claude 快捷指令](agent-profile/claude/commands/sc/)：保留 `/sc:*` 名稱，以簡短任務描述取代舊 SuperClaude 流程。
+- [Hermes SOUL.md](agent-profile/hermes/SOUL.md)：保留身份描述並套用相同工作偏好。
 
-## ⚡ 快速安裝
+模型偏好為 GPT-5.6 Luna/Sol、GPT-6 Astra、自接 GLM-5.3 Flash、DeepSeek V4 Flash/Pro；子代理預設繼承主模型。模型連線及 provider 設定不包含在 repository 中。
+
+請依 [profile 放置說明](agent-profile/README.md) 設定 Codex、Claude、Copilot、Gemini、OpenCode、Pi、Oh My Pi 或 Hermes。
 
 ```bash
-# 克隆專案
-git clone https://github.com/YOUR_USERNAME/my-terminal-skills.git
+git clone https://github.com/yenhunghuang/my-terminal-skills.git
 cd my-terminal-skills
-
-# 執行安裝
-chmod +x scripts/install.sh
-./scripts/install.sh
 ```
 
-## 🎯 使用方法
+## 舊版收藏
 
-### Claude Code
-\`\`\`bash
-claude
-> 幫我整理 Downloads 資料夾
-> 設計一個現代化的登入頁面
-\`\`\`
+`claude-skills/`、`copilot-customizations/`、`QUICKSTART.md`、`docs/USAGE.md` 與 `scripts/` 保留為舊版內容。舊安裝腳本不會安裝新版 `agent-profile/`，其路徑與 CLI 用法亦未在此次更新中驗證；新版請使用上述放置說明。
 
-### GitHub Copilot CLI
-\`\`\`bash
-gh copilot suggest "create conventional commit"
-\`\`\`
+來源保留：
 
-## 📝 來源
 - [awesome-claude-skills](https://github.com/ComposioHQ/awesome-claude-skills)
 - [awesome-copilot](https://github.com/github/awesome-copilot)
 - [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)

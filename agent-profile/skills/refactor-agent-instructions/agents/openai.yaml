@@ -1,0 +1,4 @@
+interface:
+  display_name: "Refactor Agent Instructions"
+  short_description: "Modernize agent Markdown for current models"
+  default_prompt: "Use $refactor-agent-instructions to audit and modernize the agent instruction Markdown in this workspace."
