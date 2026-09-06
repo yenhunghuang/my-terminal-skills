@@ -24,9 +24,7 @@ abort("Not a directory: #{root}") unless File.directory?(root)
 exact_names = %w[
   agent.md
   agents.md
-  claude.md
-  copilot-instructions.md
-  gemini.md
+  soul.md
 ].freeze
 
 generated_segments = %w[
@@ -64,7 +62,6 @@ if root == File.expand_path("~")
   generated_prefixes = %w[
     .antigravity/extensions/
     .bun/install/cache/
-    .cursor/extensions/
   ].freeze
 end
 
@@ -110,16 +107,7 @@ end
 
 def instruction_file?(relative, exact_names)
   base = File.basename(relative).downcase
-  normalized = relative.tr("\\", "/").downcase
-  return true if exact_names.include?(base)
-  return true if base.end_with?(".instructions.md")
-  return true if normalized == ".github/copilot-instructions.md"
-
-  scoped_rule = normalized.include?("/.cursor/rules/") ||
-                normalized.start_with?(".cursor/rules/") ||
-                normalized.include?("/.windsurf/rules/") ||
-                normalized.start_with?(".windsurf/rules/")
-  scoped_rule && %w[.md .mdc].include?(File.extname(base))
+  exact_names.include?(base)
 end
 
 def instruction_role(relative, template_segments)

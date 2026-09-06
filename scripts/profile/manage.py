@@ -22,10 +22,10 @@ from ruamel.yaml import YAML
 
 REPO = Path(__file__).resolve().parents[2]
 PROFILE = REPO / 'agent-profile'
-TOOLS = ('codex', 'claude', 'copilot', 'gemini', 'opencode', 'pi', 'omp', 'hermes')
-ENTRIES = dict(zip(TOOLS, ('.codex/AGENTS.md', '.claude/CLAUDE.md', '.copilot/copilot-instructions.md', '.gemini/GEMINI.md', '.config/opencode/AGENTS.md', '.pi/agent/AGENTS.md', '.omp/agent/AGENTS.md', '.hermes/SOUL.md')))
-SETTINGS = dict(zip(TOOLS, ('.codex/config.toml', '.claude/settings.json', '.copilot/settings.json', '.gemini/settings.json', '.config/opencode/opencode.json', '.pi/agent/settings.json', '.omp/agent/config.yml', '.hermes/config.yaml')))
-TEMPLATES = dict(zip(TOOLS, ('codex.toml','claude.json','copilot.json','gemini.json','opencode.json','pi.json','omp.yaml','hermes.yaml')))
+TOOLS = ('codex', 'pi', 'omp', 'dsh', 'hermes')
+ENTRIES = {'codex':'.codex/AGENTS.md', 'pi':'.pi/agent/AGENTS.md', 'omp':'.omp/agent/AGENTS.md', 'dsh':'.dsh/AGENTS.md', 'hermes':'.hermes/SOUL.md'}
+SETTINGS = {'codex':'.codex/config.toml', 'pi':'.pi/agent/settings.json', 'omp':'.omp/agent/config.yml', 'dsh':'.dsh/settings.yaml', 'hermes':'.hermes/config.yaml'}
+TEMPLATES = {'codex':'codex.toml', 'pi':'pi.json', 'omp':'omp.yaml', 'dsh':'dsh.yaml', 'hermes':'hermes.yaml'}
 BEGIN, END = '<!-- terminal-agent-profile:start -->', '<!-- terminal-agent-profile:end -->'
 
 
@@ -67,10 +67,8 @@ def load_machine(path):
     if not isinstance(data, dict):
         raise ValueError('machine.json must be an object')
     gateway = data.get('custom_gateway', {})
-    proxy = data.get('cliproxy', {})
-    for cfg in (gateway, proxy):
-        if not re.fullmatch(r'[A-Z][A-Z0-9_]*', cfg.get('key_env', '')):
-            raise ValueError('key_env must name an environment variable, not contain a key')
+    if not re.fullmatch(r'[A-Z][A-Z0-9_]*', gateway.get('key_env', '')):
+        raise ValueError('key_env must name an environment variable, not contain a key')
     if gateway.get('enabled'):
         check_url(gateway.get('base_url', ''))
         models = gateway.get('models', [])
@@ -84,19 +82,21 @@ def load_machine(path):
         if any(set(m) - allowed for m in models):
             raise ValueError('Unsupported model metadata field')
         for model in models:
+            levels = model.get('thinkingLevelMap', {})
+            if not isinstance(levels, dict) or set(levels) - {'off','minimal','low','medium','high','xhigh','max'} or any(v is not None and (not isinstance(v,str) or not v) for v in levels.values()):
+                raise ValueError('Invalid thinkingLevelMap metadata')
             for key in ('contextWindow', 'maxTokens'):
                 if key in model and (type(model[key]) is not int or model[key] <= 0):
                     raise ValueError('Model token limits must be positive integers')
-    check_url(proxy.get('base_url', ''), loopback=True)
-    if not proxy.get('model'):
-        raise ValueError('cliproxy.model is required')
-    for key in ('context_window_tokens','max_output_tokens'):
-        v = proxy.get(key)
-        if v is not None and (type(v) is not int or v <= 0):
-            raise ValueError('Proxy token limits must be positive integers or null')
+    desktops = data.get('desktop_commands', {})
+    if not isinstance(desktops, dict):
+        raise ValueError('desktop_commands must be an object')
+    for tool, command in desktops.items():
+        if tool not in ('codex','dsh','hermes') or not isinstance(command,list) or not command or not all(isinstance(x,str) and x for x in command):
+            raise ValueError('desktop_commands requires desktop names and nonempty argument arrays')
     overrides = data.get('overrides', {})
     if not isinstance(overrides, dict) or set(overrides) - set(TOOLS):
-        raise ValueError('overrides must be keyed by a supported CLI name')
+        raise ValueError('overrides must be keyed by a supported agent name')
     return data
 
 
@@ -108,7 +108,7 @@ def check_url(url, loopback=False):
     if u.scheme != 'https' and not (u.scheme == 'http' and local):
         raise ValueError('Use HTTPS for remote gateways or HTTP on loopback')
     if loopback and not local:
-        raise ValueError('CLIProxy wrappers require a loopback origin; use an SSH tunnel for a remote gateway')
+        raise ValueError('This route requires a loopback origin')
     if 'example' in u.hostname or '<' in url:
         raise ValueError('Replace the example gateway URL')
 
@@ -118,9 +118,7 @@ def instruction_text(old, new):
         raise ValueError('Malformed managed instruction block')
     if BEGIN in old:
         return old[:old.index(BEGIN)] + BEGIN + '\n' + new.rstrip() + '\n' + END + old[old.index(END) + len(END):]
-    # Migrate only the known stock SuperClaude router, preserving other custom text.
-    stock = {'# SuperClaude Entry Point', '@COMMANDS.md','@FLAGS.md','@PRINCIPLES.md','@RULES.md','@MCP.md','@PERSONAS.md','@ORCHESTRATOR.md','@MODES.md'}
-    if old.strip() == new.strip() or set(old.splitlines()) - {''} == stock:
+    if old.strip() == new.strip():
         old = ''
     prefix = old.rstrip() + '\n\n' if old.strip() else ''
     return prefix + BEGIN + '\n' + new.rstrip() + '\n' + END + '\n'
@@ -175,22 +173,13 @@ def build_plan(home, machine, selected):
         dest = home/SETTINGS[tool]
         source = PROFILE/'settings'/TEMPLATES[tool]
         patch = decode(source.read_text(), source.suffix)
-        if machine.get('custom_gateway', {}).get('enabled') and tool in ('pi','omp','opencode','hermes'):
+        if machine.get('custom_gateway', {}).get('enabled') and tool in ('pi','omp','dsh','hermes'):
             gateway_patch(tool, home, machine['custom_gateway'], patch, ops)
         merge(patch, machine.get('overrides', {}).get(tool, {}))
         current = decode(dest.read_text(), dest.suffix) if dest.exists() else {}
         merge(current, patch)
-        if tool == 'claude':
-            for k in ('components', 'framework'):
-                # Remove only the known SuperClaude metadata.
-                if k in current and 'core' in json.dumps(current[k]) and 'commands' in json.dumps(current[k]):
-                    del current[k]
         ops.append(operation(dest, encode(current, dest.suffix).encode()))
-        skills_root = {
-            'codex':'.agents/skills', 'claude':'.claude/skills', 'copilot':'.copilot/skills',
-            'gemini':'.gemini/skills', 'opencode':'.config/opencode/skills', 'pi':'.pi/agent/skills',
-            'omp':'.omp/agent/skills', 'hermes':'.hermes/skills'
-        }[tool]
+        skills_root = {'codex':'.agents/skills', 'pi':'.pi/agent/skills', 'omp':'.omp/agent/skills', 'dsh':'.dsh/skills', 'hermes':'.hermes/skills'}[tool]
         for skill in (PROFILE/'skills').iterdir():
             if os.name == 'nt':
                 # Windows user accounts need no symlink privileges: install managed copies.
@@ -199,14 +188,7 @@ def build_plan(home, machine, selected):
                         ops.append(operation(home/skills_root/skill.name/source.relative_to(skill), source.read_bytes()))
             else:
                 ops.append(operation(home/skills_root/skill.name, link=str(share/'skills'/skill.name)))
-    if 'claude' in selected:
-        for source in (PROFILE/'claude/commands/sc').glob('*.md'):
-            ops.append(operation(home/'.claude/commands/sc'/source.name, source.read_bytes()))
-    for name, arg in [('agent-run',''),('claude-via-cliproxy','claude-proxy'),('copilot-via-cliproxy','copilot-proxy')]:
-        if name.startswith('claude') and 'claude' not in selected:
-            continue
-        if name.startswith('copilot') and 'copilot' not in selected:
-            continue
+    for name, arg in [('agent-run','')]:
         if os.name == 'nt':
             # Use uv outside a project so launchers survive moving or deleting the checkout venv.
             script = f'@echo off\r\nuv run --no-project --python 3.11 python "{share / "runtime.py"}" {arg} %*\r\n'
@@ -239,16 +221,18 @@ def gateway_patch(tool, home, gateway, patch, ops):
             patch.update(defaultProvider='terminal-gateway', defaultModel=default)
         else:
             patch['modelRoles']['default'] = 'terminal-gateway/'+default
-    elif tool == 'opencode':
-        entries = {}
-        for m in models:
-            value = {'name':m.get('name',m['id'])}
-            limits = {dest:m[src] for src,dest in [('contextWindow','context'),('maxTokens','output')] if src in m}
-            if limits:
-                value['limit'] = limits
-            entries[m['id']] = value
-        patch.update(model='terminal-gateway/'+default, small_model='terminal-gateway/'+default)
-        patch['provider'] = {'terminal-gateway':{'npm':'@ai-sdk/openai-compatible','name':'Personal gateway','options':{'baseURL':base,'apiKey':'{env:'+key+'}'},'models':entries}}
+    elif tool == 'dsh':
+        entries = []
+        for model in models:
+            entry = {k:v for k,v in model.items() if k in ('id','name','contextWindow','maxTokens')}
+            levels = model.get('thinkingLevelMap')
+            if levels and any(v is not None for v in levels.values()):
+                entry['reasoningEfforts'] = {k:v for k,v in levels.items() if v is not None}
+            elif model.get('reasoning') is False:
+                entry['reasoningEfforts'] = False
+            entries.append(entry)
+        patch['agent-default-model'] = {'provider':'terminal-gateway','model':default}
+        patch['llm-pi-ai'] = {'providers':{'terminal-gateway':{'api':'openai-completions','baseURL':base,'apiKeyEnv':key,'models':entries,'compat':gateway.get('compat',{})}}}
     else:
         patch['model'] = {'provider':'custom:terminal-gateway','default':default}
         patch['providers'] = {'terminal-gateway':{'base_url':base,'key_env':key,'default_model':default,'api_mode':'chat_completions'}}
@@ -351,7 +335,7 @@ def main():
     parser.add_argument('command',choices=['init','install','doctor','restore'])
     parser.add_argument('--home',type=Path,default=Path.home(),help='Target account home (also useful for isolated tests)')
     parser.add_argument('--machine',type=Path,help='Machine JSON; default ~/.config/terminal-agents/machine.json')
-    parser.add_argument('--agents',default=','.join(TOOLS),help='Comma-separated CLI names')
+    parser.add_argument('--agents',default=','.join(TOOLS),help='Comma-separated agent names')
     parser.add_argument('--apply',action='store_true',help='Write files; install previews by default')
     parser.add_argument('--manifest',type=Path,help='Restore manifest printed by an install')
     args=parser.parse_args()
@@ -359,7 +343,7 @@ def main():
     path=args.machine or home/'.config/terminal-agents/machine.json'
     selected=args.agents.split(',')
     if not selected or set(selected)-set(TOOLS) or len(set(selected))!=len(selected):
-        raise ValueError('Invalid/duplicate CLI names')
+        raise ValueError('Invalid/duplicate agent names')
     if args.command=='init':
         if path.exists():
             print('Machine settings already exist; kept unchanged.');return
@@ -376,20 +360,28 @@ def main():
     ops=build_plan(home,machine,selected)
     if args.command=='doctor':
         failed=False
+        from runtime import desktop_prefix
         for tool in selected:
-            binary=shutil.which(tool)
-            print(f'{tool}: binary={"found" if binary else "MISSING"}; instruction={"present" if (home/ENTRIES[tool]).exists() else "MISSING"}')
-            failed |= not bool(binary)
+            if tool in ('codex','dsh','hermes'):
+                try:
+                    desktop_prefix(tool,machine,os.environ)
+                    status = 'desktop entry found (launch unverified)'
+                except ValueError:
+                    status = 'desktop entry UNCONFIGURED; set desktop_commands'
+                    failed = True
+            else:
+                found = bool(shutil.which(tool))
+                status = 'CLI found' if found else 'CLI MISSING'
+                failed |= not found
+            print(f'{tool}: {status}; instruction={"present" if (home/ENTRIES[tool]).exists() else "MISSING"}')
         print(f'Profile drift: {len(ops)} pending file changes')
         print('Authentication and live model/tool support are NOT inferred from file checks.')
         if not machine['custom_gateway'].get('enabled'):
-            print('Custom gateway disabled: Pi/Hermes/OpenCode keep their native or existing model selection.')
+            print('Custom gateway disabled: Pi/OMP/DeepSeek Harness/Hermes keep their native or existing model selection.')
         else:
             for model in machine['custom_gateway']['models']:
                 if not {'contextWindow','maxTokens'} <= model.keys():
                     print(f'Metadata incomplete for {model["id"]}; the CLI may use its own token-budget defaults.')
-        if any(machine['cliproxy'].get(k) is None for k in ('context_window_tokens','max_output_tokens')):
-            print('Proxy wrappers require explicit token limits before inference.')
         if ops or failed:
             raise SystemExit(1)
     else:

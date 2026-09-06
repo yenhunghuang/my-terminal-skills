@@ -47,15 +47,15 @@ class ProfileTests(unittest.TestCase):
         self.assertTrue((self.home/'.pi/agent/skills/pdf').is_dir())
     def test_existing_settings_auth_and_instructions_preserved(self):
         original={'permissions':{'allow':['Read']},'env':{'TEST_LOCAL_SECRET':'do-not-replace'},'effortLevel':'low'}
-        self.put('.claude/settings.json',json.dumps(original))
-        self.put('.claude/CLAUDE.md','Use the company build server.\n')
+        self.put('.pi/agent/settings.json',json.dumps(original))
+        self.put('.pi/agent/AGENTS.md','Use the company build server.\n')
         self.put('.codex/config.toml','# preserve this comment\nmodel="old"\n[model_providers.company]\nbase_url="https://company.invalid/v1"\n')
         self.put('.hermes/config.yaml','providers:\n  company:\n    key_env: ORIGINAL_KEY\nmemory:\n  memory_enabled: false\n')
         self.put('.hermes/SOUL.md','You are my custom assistant.\n')
         self.apply()
-        data=json.loads((self.home/'.claude/settings.json').read_text())
+        data=json.loads((self.home/'.pi/agent/settings.json').read_text())
         self.assertEqual(data['permissions'],original['permissions']);self.assertEqual(data['env'],original['env'])
-        self.assertIn('Use the company build server.',(self.home/'.claude/CLAUDE.md').read_text())
+        self.assertIn('Use the company build server.',(self.home/'.pi/agent/AGENTS.md').read_text())
         self.assertIn('# preserve this comment',(self.home/'.codex/config.toml').read_text())
         self.assertIn('ORIGINAL_KEY',(self.home/'.hermes/config.yaml').read_text())
         self.assertIn('my custom assistant',(self.home/'.hermes/SOUL.md').read_text())
@@ -66,31 +66,32 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(p['apiKey'],'$TERMINAL_AGENTS_GATEWAY_KEY')
         omp=M.decode((self.home/'.omp/agent/models.yml').read_text(),'.yml')['providers']['terminal-gateway']
         self.assertEqual(omp['apiKey'],'TERMINAL_AGENTS_GATEWAY_KEY')
-        op=json.loads((self.home/'.config/opencode/opencode.json').read_text())
-        self.assertEqual(op['small_model'],op['model'])
+        dsh=M.decode((self.home/'.dsh/settings.yaml').read_text(),'.yaml')
+        self.assertEqual(dsh['llm-pi-ai']['providers']['terminal-gateway']['apiKeyEnv'],'TERMINAL_AGENTS_GATEWAY_KEY')
+        self.assertEqual(dsh['agent-default-model']['model'],self.config['custom_gateway']['default_model'])
         hermes=M.decode((self.home/'.hermes/config.yaml').read_text(),'.yaml')
         self.assertEqual(hermes['model']['provider'],'custom:terminal-gateway')
         self.assertEqual(hermes['providers']['terminal-gateway']['key_env'],'TERMINAL_AGENTS_GATEWAY_KEY')
         self.assertEqual(M.build_plan(self.home,self.config,M.TOOLS),[])
     def test_invalid_config_fails_before_mutation(self):
-        self.put('.copilot/settings.json','invalid json')
+        self.put('.pi/agent/settings.json','invalid json')
         with self.assertRaises(ValueError):M.build_plan(self.home,self.config,M.TOOLS)
         self.assertFalse((self.home/'.codex/AGENTS.md').exists())
     def test_subset_does_not_install_other_clients(self):
         self.apply(('codex',))
-        self.assertFalse((self.home/'.claude').exists())
-        self.assertFalse((self.home/'.local/bin/claude-via-cliproxy').exists())
+        self.assertFalse((self.home/'.pi').exists())
+        self.assertFalse((self.home/'.dsh').exists())
     @unittest.skipIf(os.name == "nt", "POSIX permissions/symlinks; Windows installs skill copies and uses environment secrets")
     def test_restore_preserves_previous_symlink_and_directory(self):
         target=self.put('private-original.md','Original personal instructions\n')
-        p=self.home/'.claude/CLAUDE.md';p.parent.mkdir(parents=True);p.symlink_to(target)
-        self.put('.claude/skills/pdf/custom.txt','Keep my original resource')
-        before=M.fingerprint(self.home/'.claude/skills/pdf')
-        self.apply(('claude',))
+        p=self.home/'.pi/agent/AGENTS.md';p.parent.mkdir(parents=True);p.symlink_to(target)
+        self.put('.pi/agent/skills/pdf/custom.txt','Keep my original resource')
+        before=M.fingerprint(self.home/'.pi/agent/skills/pdf')
+        self.apply(('pi',))
         self.assertEqual(target.read_text(),'Original personal instructions\n')
         with contextlib.redirect_stdout(io.StringIO()):M.restore(self.manifest(),self.home)
         self.assertTrue(p.is_symlink());self.assertEqual(p.resolve(),target)
-        self.assertEqual(M.fingerprint(self.home/'.claude/skills/pdf'),before)
+        self.assertEqual(M.fingerprint(self.home/'.pi/agent/skills/pdf'),before)
     def test_restore_refuses_post_install_edits(self):
         self.apply(('codex',))
         self.put('.codex/AGENTS.md','New user work')
@@ -98,8 +99,8 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual((self.home/'.codex/AGENTS.md').read_text(),'New user work')
     @unittest.skipIf(os.name == "nt", "POSIX permissions/symlinks; Windows installs skill copies and uses environment secrets")
     def test_parent_symlink_refused(self):
-        (self.home/'elsewhere').mkdir();(self.home/'.claude').symlink_to(self.home/'elsewhere')
-        with self.assertRaisesRegex(ValueError,'Parent directory'):M.build_plan(self.home,self.config,('claude',))
+        (self.home/'elsewhere').mkdir();(self.home/'.pi').symlink_to(self.home/'elsewhere')
+        with self.assertRaisesRegex(ValueError,'Parent directory'):M.build_plan(self.home,self.config,('pi',))
     def test_transaction_rolls_back_after_write_failure(self):
         p=self.put('.codex/config.toml','model = "before"\n')
         ops=M.build_plan(self.home,self.config,('codex',));real=M.write_op;counter=0
@@ -111,42 +112,52 @@ class ProfileTests(unittest.TestCase):
         with patch.object(M,'write_op',broken), self.assertRaises(OSError):M.apply_plan(ops,self.home,['codex'])
         self.assertEqual(p.read_text(),'model = "before"\n')
         for op in ops:self.assertEqual(M.fingerprint(op['path']),op['before'])
-    @unittest.skipIf(os.name == "nt", "POSIX permissions/symlinks; Windows installs skill copies and uses environment secrets")
+    @unittest.skipIf(os.name == 'nt', 'POSIX private file semantics')
     def test_secret_permissions_and_native_auth_isolation(self):
-        self.config['cliproxy'].update(context_window_tokens=100000,max_output_tokens=10000)
-        p=self.put('.config/terminal-agents/secrets.json',json.dumps({'TERMINAL_AGENTS_CLIPROXY_KEY':'fixture-key'}));p.chmod(0o600)
-        env={'PATH':'/bin','ANTHROPIC_API_KEY':'native-auth'}
+        self.enable_gateway()
+        p=self.put('.config/terminal-agents/secrets.json',json.dumps({'TERMINAL_AGENTS_GATEWAY_KEY':'fixture-key'}));p.chmod(0o600)
+        env={'PATH':'/bin','NATIVE_LOGIN':'keep'}
         with patch.object(R.shutil,'which',return_value='/bin/true'):
-            argv,out=R.launch_spec('claude-proxy',['hello world'],self.home,self.config,env)
-            self.assertNotIn('ANTHROPIC_API_KEY',out);self.assertEqual(out['ANTHROPIC_AUTH_TOKEN'],'fixture-key')
-            self.assertEqual(out['CLAUDE_CODE_SUBAGENT_MODEL'],'gpt-5.6-sol')
-            self.assertNotIn('fixture-key',str(argv));self.assertEqual(env['ANTHROPIC_API_KEY'],'native-auth')
-            _,native=R.launch_spec('claude',[],self.home,self.config,env)
+            argv,out=R.launch_spec('pi',['hello world'],self.home,self.config,env)
+            self.assertEqual(out['TERMINAL_AGENTS_GATEWAY_KEY'],'fixture-key')
+            self.assertNotIn('fixture-key',str(argv));self.assertNotIn('TERMINAL_AGENTS_GATEWAY_KEY',env)
+            _,native=R.launch_spec('codex-cli',[],self.home,self.config,env)
             self.assertEqual(native,env)
         p.chmod(0o644)
-        with self.assertRaisesRegex(ValueError,'private'):R.read_key(self.home,'TERMINAL_AGENTS_CLIPROXY_KEY',{})
-    def test_changed_model_requires_its_own_metadata(self):
-        self.config['cliproxy'].update(context_window_tokens=100000,max_output_tokens=10000)
-        with patch.object(R.shutil,'which',return_value='/bin/true'):
-            with self.assertRaisesRegex(ValueError,'metadata'):
-                R.launch_spec('claude-proxy',[],self.home,self.config,{'PATH':'/bin','CLIPROXY_MODEL':'gpt-6-astra'})
-    def test_copilot_keeps_args_and_removes_pinned_child_routing(self):
-        self.config['cliproxy'].update(context_window_tokens=100000,max_output_tokens=10000)
-        env={'PATH':'/bin','TERMINAL_AGENTS_CLIPROXY_KEY':'fixture-key','COPILOT_PROVIDER_MODEL_ID':'old','COPILOT_PROVIDER_BEARER_TOKEN':'old-native'}
-        with patch.object(R.shutil,'which',return_value='/bin/true'):
-            argv,out=R.launch_spec('copilot-proxy',['-p','a ; $(b)'],self.home,self.config,env)
-        self.assertEqual(argv[-2:],['-p','a ; $(b)']);self.assertNotIn('COPILOT_PROVIDER_MODEL_ID',out)
-        self.assertNotIn('COPILOT_PROVIDER_BEARER_TOKEN',out);self.assertNotIn('TERMINAL_AGENTS_CLIPROXY_KEY',out)
-        self.assertIn('--secret-env-vars=COPILOT_PROVIDER_API_KEY',argv)
+        with self.assertRaisesRegex(ValueError,'private'):R.read_key(self.home,'TERMINAL_AGENTS_GATEWAY_KEY',{})
+    def test_desktop_and_cli_are_distinct(self):
+        self.config['desktop_commands']={'codex':['/apps/codex-desktop','--native'],'hermes':['/apps/hermes-desktop']}
+        with patch.object(R.shutil,'which',side_effect=lambda x,**kw:x):
+            argv,_=R.launch_spec('codex',['literal ; $(text)'],self.home,self.config,{'PATH':'fixture'})
+            self.assertEqual(argv,['/apps/codex-desktop','--native','literal ; $(text)'])
+            argv,_=R.launch_spec('codex-cli',[],self.home,self.config,{'PATH':'fixture'})
+            self.assertEqual(argv,['codex'])
+            argv,_=R.launch_spec('hermes',[],self.home,self.config,{'PATH':'fixture'})
+            self.assertEqual(argv,['/apps/hermes-desktop'])
+    def test_only_selected_agents_are_shipped(self):
+        self.assertEqual(set(M.TOOLS),{'codex','pi','omp','dsh','hermes'})
+        self.assertEqual(set(M.TEMPLATES.values()),{p.name for p in (ROOT/'agent-profile/settings').iterdir()})
+        self.assertEqual({p.name for p in (ROOT/'agent-profile/skills').iterdir()},{'pdf','ui-ux-pro-max','refactor-agent-instructions'})
+    def test_desktop_command_validation(self):
+        self.config['desktop_commands']={'dsh':'not an argument array'}
+        p=self.put('machine.json',json.dumps(self.config))
+        with self.assertRaisesRegex(ValueError,'desktop_commands'):M.load_machine(p)
+        with patch.object(R.sys,'platform','linux'):
+            with self.assertRaisesRegex(ValueError,'desktop_commands'):R.desktop_prefix('dsh',{}, {})
+    def test_dsh_preserves_plugin_settings_and_maps_reasoning(self):
+        self.put('.dsh/settings.yaml','# keep\nother-plugin:\n  enabled: true\n')
+        self.enable_gateway()
+        self.config['custom_gateway']['models'][0]['thinkingLevelMap']={'off':'none','high':'high','max':'ultra','low':None}
+        self.apply(('dsh',))
+        data=M.decode((self.home/'.dsh/settings.yaml').read_text(),'.yaml')
+        self.assertTrue(data['other-plugin']['enabled'])
+        model=data['llm-pi-ai']['providers']['terminal-gateway']['models'][0]
+        self.assertEqual(model['reasoningEfforts'],{'off':'none','high':'high','max':'ultra'})
+        self.assertIn('# keep',(self.home/'.dsh/settings.yaml').read_text())
     def test_remote_cleartext_and_embedded_url_credentials_rejected(self):
         for url in ['http://remote.invalid/v1','https://user:pass@remote.invalid/v1','https://remote.invalid/v1?key=secret']:
             with self.assertRaises(ValueError):M.check_url(url)
         with self.assertRaises(ValueError):M.check_url('https://remote.invalid',loopback=True)
-    def test_superclaude_router_is_replaced_without_imports(self):
-        old='# SuperClaude Entry Point\n\n'+''.join('@'+n+'.md\n' for n in ['COMMANDS','FLAGS','PRINCIPLES','RULES','MCP','PERSONAS','ORCHESTRATOR','MODES'])
-        value=M.instruction_text(old,'New policy')
-        self.assertNotIn('@PERSONAS',value);self.assertIn('New policy',value)
-
     def test_windows_npm_shim_uses_node_without_a_command_shell(self):
         binary=self.put('npm/pi.cmd','@echo off')
         root=self.home/'npm/node_modules/@earendil-works/pi-coding-agent'
@@ -156,10 +167,5 @@ class ProfileTests(unittest.TestCase):
         with patch.object(R.shutil,'which',return_value='node'):
             prefix=R.executable_prefix('pi',str(binary),{'PATH':'fixture'})
         self.assertEqual(prefix,['node',str((root/'dist/cli.js').resolve())])
-    def test_copilot_npm_shim_options_follow_script_entry(self):
-        self.config['cliproxy'].update(context_window_tokens=100000,max_output_tokens=10000)
-        with patch.object(R.shutil,'which',return_value='copilot.cmd'), patch.object(R,'executable_prefix',return_value=['node','cli.js']):
-            argv,_=R.launch_spec('copilot-proxy',['-p','hello'],self.home,self.config,{'PATH':'fixture','TERMINAL_AGENTS_CLIPROXY_KEY':'fixture-key'})
-        self.assertEqual(argv,['node','cli.js','--secret-env-vars=COPILOT_PROVIDER_API_KEY','-p','hello'])
 
 if __name__=='__main__':unittest.main()

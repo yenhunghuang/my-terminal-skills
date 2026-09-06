@@ -1,4 +1,4 @@
-"""Thin launchers: native CLI tools plus per-process gateway credentials."""
+"""Thin launchers for selected desktop apps and terminal coding agents."""
 from __future__ import annotations
 import argparse
 import getpass
@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.error import HTTPError, URLError
 
-TOOLS = ('codex','claude','copilot','gemini','opencode','pi','omp','hermes')
+TOOLS = ('codex','codex-cli','pi','omp','dsh','hermes')
 
 
 def profile_home():
@@ -76,18 +76,14 @@ def valid_url(url, loopback=False):
     if not u.hostname or u.username or u.password or u.query or u.fragment:
         raise ValueError('Invalid gateway URL')
     if (loopback and not local) or (u.scheme != 'https' and not (u.scheme == 'http' and local)):
-        raise ValueError('Remote gateways require HTTPS; CLIProxy must be loopback')
+        raise ValueError('Remote gateways require HTTPS')
     return url.rstrip('/')
 
 
 def executable_prefix(tool, binary, env):
     if Path(binary).suffix.lower() not in ('.cmd','.bat'):
         return [binary]
-    packages = {
-        'codex':['@openai/codex'], 'copilot':['@github/copilot'], 'gemini':['@google/gemini-cli'],
-        'claude':['@anthropic-ai/claude-code'], 'pi':['@earendil-works/pi-coding-agent','@mariozechner/pi-coding-agent'],
-        'opencode':['opencode-ai'], 'omp':['@oh-my-pi/pi-coding-agent']
-    }
+    packages = {'codex':['@openai/codex'], 'pi':['@earendil-works/pi-coding-agent','@mariozechner/pi-coding-agent'], 'omp':['@oh-my-pi/pi-coding-agent']}
     node = shutil.which('node',path=env.get('PATH'))
     for package in packages.get(tool,[]):
         root = Path(binary).parent/'node_modules'/package
@@ -102,54 +98,43 @@ def executable_prefix(tool, binary, env):
     raise ValueError('Unsupported Windows command shim; install a native executable or use WSL')
 
 
+def desktop_prefix(tool, config, env):
+    command = config.get('desktop_commands',{}).get(tool)
+    if command:
+        if not isinstance(command,list) or not all(isinstance(x,str) and x for x in command):
+            raise ValueError('Desktop command must be an argument array')
+        binary = shutil.which(command[0],path=env.get('PATH'))
+        if not binary or Path(binary).suffix.lower() in ('.cmd','.bat'):
+            raise ValueError('Desktop entry requires an executable, not a shell shim')
+        return [binary]+command[1:]
+    if sys.platform == 'darwin' and tool in ('codex','hermes'):
+        import plistlib
+        name = {'codex':'Codex','hermes':'Hermes'}[tool]
+        for root in (Path('/Applications'),Path.home()/'Applications'):
+            app = root/(name+'.app')
+            plist = app/'Contents/Info.plist'
+            if plist.is_file():
+                binary = app/'Contents/MacOS'/plistlib.loads(plist.read_bytes())['CFBundleExecutable']
+                if binary.is_file():
+                    return [str(binary)]
+    raise ValueError('Configure desktop_commands for this app in machine.json; see BOOTSTRAP.md')
+
+
 def launch_spec(tool, args, home, config, env=None):
     env = dict(os.environ if env is None else env)
-    proxy = tool in ('claude-proxy','copilot-proxy')
-    native = tool.removesuffix('-proxy') if proxy else tool
-    if native not in TOOLS:
-        raise ValueError('Unsupported CLI')
-    binary = shutil.which(native, path=env.get('PATH'))
-    if not binary:
-        raise ValueError(f'{native} is not installed/on PATH; see BOOTSTRAP.md')
-    argv = executable_prefix(native,binary,env) + list(args)
-    if proxy:
-        cfg=config['cliproxy'];base=valid_url(cfg['base_url'],loopback=True)
-        if urlsplit(base).path not in ('','/'):
-            raise ValueError('CLIProxy base_url must be an origin without /v1')
-        model=env.get('CLIPROXY_MODEL') or cfg['model']
-        # Metadata must be supplied for the selected model, not guessed from another model.
-        values=[]
-        changed_model=model != cfg['model']
-        for variable,key in [('CLIPROXY_CONTEXT_WINDOW_TOKENS','context_window_tokens'),('CLIPROXY_MAX_OUTPUT_TOKENS','max_output_tokens')]:
-            value=env.get(variable) or (None if changed_model else cfg.get(key))
-            if value is None or not str(value).isdigit() or int(value)<=0:
-                raise ValueError(f'Set {variable} from metadata for the selected model')
-            values.append(str(value))
-        context,output=values
-        key=read_key(home,cfg['key_env'],env)
-        if native=='claude':
-            for name in ('ANTHROPIC_API_KEY','CLAUDE_CODE_OAUTH_TOKEN'):
-                env.pop(name,None)
-            env.update(ANTHROPIC_BASE_URL=base,ANTHROPIC_AUTH_TOKEN=key,ANTHROPIC_MODEL=model,
-                ANTHROPIC_DEFAULT_OPUS_MODEL=model,ANTHROPIC_DEFAULT_SONNET_MODEL=model,
-                ANTHROPIC_DEFAULT_HAIKU_MODEL=env.get('CLIPROXY_FAST_MODEL',model),
-                ANTHROPIC_SMALL_FAST_MODEL=env.get('CLIPROXY_FAST_MODEL',model),
-                CLAUDE_CODE_SUBAGENT_MODEL=env.get('CLIPROXY_SUBAGENT_MODEL',model),
-                CLAUDE_CODE_MAX_CONTEXT_TOKENS=context,CLAUDE_CODE_MAX_OUTPUT_TOKENS=output)
-        else:
-            for name in ('COPILOT_PROVIDER_BEARER_TOKEN','COPILOT_PROVIDER_MODEL_ID','COPILOT_PROVIDER_WIRE_MODEL'):
-                env.pop(name,None)
-            env.update(COPILOT_PROVIDER_TYPE='openai',COPILOT_PROVIDER_BASE_URL=base+'/v1',
-                COPILOT_PROVIDER_API_KEY=key,COPILOT_PROVIDER_WIRE_API='responses',COPILOT_MODEL=model,
-                COPILOT_PROVIDER_MAX_PROMPT_TOKENS=context,COPILOT_PROVIDER_MAX_OUTPUT_TOKENS=output)
-            argv.insert(len(argv)-len(args), '--secret-env-vars=COPILOT_PROVIDER_API_KEY')
-        # Avoid passing a second copy of the secret under a generic variable.
-        if cfg['key_env'] not in ('ANTHROPIC_AUTH_TOKEN','COPILOT_PROVIDER_API_KEY'):
-            env.pop(cfg['key_env'],None)
-    elif native in ('pi','omp','hermes','opencode') and config['custom_gateway'].get('enabled'):
+    if tool not in TOOLS:
+        raise ValueError('Unsupported agent')
+    if tool in ('codex','dsh','hermes'):
+        argv = desktop_prefix(tool,config,env)+list(args)
+    else:
+        native = 'codex' if tool == 'codex-cli' else tool
+        binary = shutil.which(native,path=env.get('PATH'))
+        if not binary:
+            raise ValueError(f'{native} is not installed/on PATH; see BOOTSTRAP.md')
+        argv = executable_prefix(native,binary,env)+list(args)
+    if tool in ('pi','omp','dsh','hermes') and config['custom_gateway'].get('enabled'):
         cfg=config['custom_gateway'];valid_url(cfg['base_url'])
         env[cfg['key_env']]=read_key(home,cfg['key_env'],env)
-    # Native Codex/Claude/Copilot/Gemini keep native auth and provider selection.
     return argv,env
 
 
@@ -159,17 +144,17 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 def probe(home,config,route):
-    cfg=config['cliproxy' if route=='cliproxy' else 'custom_gateway']
+    cfg=config['custom_gateway']
     if route=='custom' and not cfg.get('enabled'):
         raise ValueError('Custom gateway is disabled')
-    base=valid_url(cfg['base_url'],loopback=route=='cliproxy')
-    url=base+('/v1/models' if route=='cliproxy' else '/models')
+    base=valid_url(cfg['base_url'])
+    url=base+'/models'
     key=read_key(home,cfg['key_env'],os.environ)
     request=Request(url,headers={'Authorization':'Bearer '+key})
     with build_opener(NoRedirect).open(request,timeout=15) as response:
         data=json.loads(response.read(4*1024*1024))
     ids={item.get('id') for item in data.get('data',[]) if isinstance(item,dict)}
-    wanted=[cfg['model']] if route=='cliproxy' else [m['id'] for m in cfg['models']]
+    wanted=[m['id'] for m in cfg['models']]
     missing=[m for m in wanted if m not in ids]
     print(f'Model catalog reachable. Configured models present: {len(wanted)-len(missing)}/{len(wanted)}')
     for model in missing:
@@ -180,7 +165,7 @@ def probe(home,config,route):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('tool',choices=TOOLS+('claude-proxy','copilot-proxy','secret','probe'))
+    parser.add_argument('tool',choices=TOOLS+('secret','probe'))
     parser.add_argument('args',nargs=argparse.REMAINDER)
     ns=parser.parse_args();home=profile_home();args=ns.args
     if args[:1]==['--']:args=args[1:]
@@ -189,8 +174,8 @@ def main():
         store_key(home,args[0]);return
     config=settings(home)
     if ns.tool=='probe':
-        if len(args)!=1 or args[0] not in ('cliproxy','custom'):
-            raise ValueError('Usage: agent-run probe cliproxy|custom')
+        if len(args)!=1 or args[0] != 'custom':
+            raise ValueError('Usage: agent-run probe custom')
         if not probe(home,config,args[0]):raise SystemExit(1)
         return
     argv,env=launch_spec(ns.tool,args,home,config)

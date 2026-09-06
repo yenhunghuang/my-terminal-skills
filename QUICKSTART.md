@@ -1,3 +1,3 @@
-# Quickstart
+# 快速開始
 
-請使用 [BOOTSTRAP.md](BOOTSTRAP.md)：提供 macOS、Linux、WSL、Windows PowerShell 的安裝、連線、驗證與還原流程。
+請依 [BOOTSTRAP.md](BOOTSTRAP.md) 安裝 Pi、Oh My Pi、Codex Desktop／CLI、DeepSeek Harness Desktop 與 Hermes Desktop 的個人 profile。

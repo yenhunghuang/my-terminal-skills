@@ -1,6 +1,6 @@
 # Repository guidance
 
-This repository distributes a portable personal CLI agent profile. Shared user instructions live in `agent-profile/AGENTS.md`; this file is for maintaining the installer.
+This repository distributes a portable personal profile for Pi, Oh My Pi, Codex Desktop (with optional CLI), DeepSeek Harness Desktop, and Hermes Desktop as an assistant. Shared user instructions live in `agent-profile/AGENTS.md`; this file is for maintaining the installer.
 
 - Run `uv run --locked python -m unittest discover -s tests -v` for installer or launcher changes.
 - Test installation and restoration in a temporary `--home`, not the developer's real home. A user-requested bootstrap on their computer may use their actual home.

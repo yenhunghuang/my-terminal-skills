@@ -1,5 +1,7 @@
 # Personal working preferences
 
+- Supported tools: Pi, Oh My Pi, Codex Desktop (primary; CLI occasionally), and DeepSeek Harness Desktop for coding; Hermes Desktop for assistant work. Limit configuration and setup recommendations to these tools unless the user expands the scope.
+
 - Preferred model pool: GPT-5.6 Luna/Sol, GPT-6 Astra, and the user's connected GLM-5.3 Flash and DeepSeek V4 Flash/Pro. Preserve the selected provider and exact available model ID; do not infer capability or suitability from a name such as Luna or Flash. Choose within this pool according to the task and explicit user constraints, and disclose a necessary fallback outside it.
 - Subagents inherit the selected main model by default. Use a different model when the task benefits from it or the user requests it, rather than enforcing fixed cheap/fast routing.
 - Use the simplest workflow that completes the task. Choose plans, delegation, review loops, and additional tools only when they help and the environment permits them.
