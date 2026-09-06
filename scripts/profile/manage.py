@@ -208,11 +208,11 @@ def build_plan(home, machine, selected):
         if name.startswith('copilot') and 'copilot' not in selected:
             continue
         if os.name == 'nt':
-            # The interpreter installed by uv is explicit; shell startup files are not edited.
-            script = f'@echo off\r\n"{sys.executable}" "{share / "runtime.py"}" {arg} %*\r\n'
+            # Use uv outside a project so launchers survive moving or deleting the checkout venv.
+            script = f'@echo off\r\nuv run --no-project --python 3.11 python "{share / "runtime.py"}" {arg} %*\r\n'
             ops.append(operation(home/'.local/bin'/(name+'.cmd'), script.encode(), mode=0o700))
         else:
-            script = f'#!/bin/sh\nexec python3 {shlex.quote(str(share/"runtime.py"))} {arg} "$@"\n'
+            script = f'#!/bin/sh\nexec uv run --no-project --python 3.11 python {shlex.quote(str(share/"runtime.py"))} {arg} "$@"\n'
             ops.append(operation(home/'.local/bin'/name, script.encode(), mode=0o700))
     for op in ops:
         checked_parent(op['path'], home)
