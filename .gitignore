@@ -17,3 +17,14 @@ temp/
 # Logs
 *.log
 npm-debug.log*
+
+# Machine-only settings, credentials, and installer artifacts
+.venv/
+__pycache__/
+*.pyc
+machine.json
+machine.local.json
+secrets.json
+.env
+.env.*
+backups/

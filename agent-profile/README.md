@@ -9,6 +9,10 @@
 - [claude/commands/sc/](claude/commands/sc/)：17 個精簡快捷指令，保留 `/sc:*` 名稱。
 - [hermes/SOUL.md](hermes/SOUL.md)：Hermes 身份描述與相同全域偏好。
 
+## 可攜式設定與安裝
+
+[settings/](settings/) 包含八個 CLI 的原生設定片段；[machine.example.json](machine.example.json) 提供每台機器的 gateway 參數格式。安裝、Windows／WSL、登入、金鑰、驗證和還原請依 [BOOTSTRAP.md](../BOOTSTRAP.md)。
+
 ## 放置位置
 
 先備份目標檔案；有既有個人規則時合併內容。以下路徑均以預設使用者 profile 為例，自訂 home 或 named profile 應改用其實際路徑。
@@ -45,4 +49,4 @@ Markdown 只提供行為偏好。需調整實際模型時，使用各工具的 m
 
 本目錄保存個人精簡版，不是官方 CLI 系統 prompt。PDF skill 保留原有 [Apache-2.0 授權檔](skills/pdf/LICENSE.txt)，其工作流程文字已精簡。UI skill 沿用 ui-ux-pro-max 的識別名稱，改為模型直接做設計判斷；匯出時省略原安裝中無法執行的 `scripts` / `data` 路徑占位檔，並調整說明。
 
-此 profile 不包含 OAuth、API keys、實際 provider settings、session、歷史紀錄、本機絕對路徑、wrapper 私人設定或備份。
+此 profile 包含可攜式 settings 與 provider 產生邏輯；不包含 OAuth、API keys、私人 gateway 位址、session、歷史紀錄、舊電腦的絕對路徑或備份。

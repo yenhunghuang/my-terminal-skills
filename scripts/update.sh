@@ -1,10 +1,5 @@
-#!/bin/bash
-
-echo "🔄 更新 Terminal Skills..."
-echo ""
-
-# 拉取最新變更
-git pull origin main
-
-# 重新執行安裝
-./install.sh
+#!/bin/sh
+set -eu
+PROFILE_REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+git -C "$PROFILE_REPO" pull --ff-only
+exec "$PROFILE_REPO/scripts/install.sh" install "$@"

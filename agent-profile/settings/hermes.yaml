@@ -1,0 +1,17 @@
+agent:
+  reasoning_effort: max
+  verbose: false
+terminal:
+  backend: local
+  cwd: .
+display:
+  language: zh-hant
+  streaming: true
+  inline_diffs: true
+  show_cost: false
+delegation:
+  model: ""
+  provider: ""
+  base_url: ""
+  api_key: ""
+  reasoning_effort: ""

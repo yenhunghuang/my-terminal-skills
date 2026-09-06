@@ -1,0 +1,36 @@
+{
+  "custom_gateway": {
+    "enabled": false,
+    "base_url": "",
+    "key_env": "TERMINAL_AGENTS_GATEWAY_KEY",
+    "default_model": "ollama/glm-5.3-flash",
+    "models": [
+      {
+        "id": "ollama/glm-5.3-flash",
+        "reasoning": true,
+        "input": [
+          "text"
+        ]
+      },
+      {
+        "id": "ollama/deepseek-v4-flash:0731",
+        "reasoning": true,
+        "input": [
+          "text"
+        ]
+      }
+    ],
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsReasoningEffort": true
+    }
+  },
+  "cliproxy": {
+    "base_url": "http://127.0.0.1:8317",
+    "key_env": "TERMINAL_AGENTS_CLIPROXY_KEY",
+    "model": "gpt-5.6-sol",
+    "context_window_tokens": null,
+    "max_output_tokens": null
+  },
+  "overrides": {}
+}
