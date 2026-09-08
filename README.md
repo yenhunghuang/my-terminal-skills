@@ -18,10 +18,13 @@
 git clone https://github.com/yenhunghuang/my-terminal-skills.git
 cd my-terminal-skills
 ./scripts/install.sh init
-./scripts/install.sh install --apply
+./scripts/install.sh install --agents codex,pi,omp
+./scripts/install.sh install --agents codex,pi,omp --apply
 ```
 
-Windows 使用 `scripts/install.ps1` 的相同子命令。套件安裝設定，不代替程式安裝或帳號登入。Desktop 與 CLI 的啟動方式見 [BOOTSTRAP.md](BOOTSTRAP.md)。
+以上為 WSL 範例；Windows 使用 `scripts/install.ps1` 與 `--agents codex,dsh`。Hermes Desktop 需確認實際 backend home。套件安裝設定，不代替程式安裝或帳號登入。Desktop 與 CLI 的啟動方式見 [BOOTSTRAP.md](BOOTSTRAP.md)。
+
+更新會保留既有模型與原生設定；範本只補齊缺少欄位，明確啟用的 gateway 與本機 `overrides` 優先。更新與 `doctor` 請沿用安裝時的 `--agents` 清單。
 
 模型偏好：GPT-5.6 Luna/Sol、GPT-6 Astra、自接 GLM-5.3 Flash、DeepSeek V4 Flash/Pro。保留實際 provider 與 model ID；子代理預設繼承主模型，按任務選用規劃、委派與驗證，不強加固定流程。
 

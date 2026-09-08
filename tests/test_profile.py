@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import sys
 import unittest
@@ -73,6 +74,39 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(hermes['model']['provider'],'custom:terminal-gateway')
         self.assertEqual(hermes['providers']['terminal-gateway']['key_env'],'TERMINAL_AGENTS_GATEWAY_KEY')
         self.assertEqual(M.build_plan(self.home,self.config,M.TOOLS),[])
+    def test_template_defaults_preserve_existing_model_selection(self):
+        originals = {
+            'codex': {'model': 'gpt-5.6-sol', 'model_reasoning_effort': 'high'},
+            'pi': {'defaultProvider': 'my-provider', 'defaultModel': 'my-model', 'defaultThinkingLevel': 'high'},
+            'omp': {'modelRoles': {'default': 'my-provider/my-model', 'advisor': 'my-provider/advisor'}},
+            'hermes': {'delegation': {'model': 'my-child', 'provider': 'my-provider'}, 'agent': {'reasoning_effort': 'high'}},
+        }
+        for tool, original in originals.items():
+            suffix = Path(M.SETTINGS[tool]).suffix
+            self.put(M.SETTINGS[tool], M.encode(original, suffix))
+        self.apply()
+        for tool, original in originals.items():
+            actual = M.decode((self.home/M.SETTINGS[tool]).read_text(encoding='utf-8'), Path(M.SETTINGS[tool]).suffix)
+            for key, value in original.items():
+                if isinstance(value, dict):
+                    for child_key, child_value in value.items():
+                        self.assertEqual(actual[key][child_key], child_value)
+                else:
+                    self.assertEqual(actual[key], value)
+        codex = M.decode((self.home/M.SETTINGS['codex']).read_text(encoding='utf-8'), '.toml')
+        self.assertEqual(codex['personality'], 'pragmatic')
+
+    def test_explicit_gateway_and_overrides_replace_existing_defaults(self):
+        self.put('.omp/agent/config.yml', 'modelRoles:\n  default: old-provider/old-model\n  advisor: old-provider/advisor\n')
+        self.put('.codex/config.toml', 'model = "old-model"\n')
+        self.enable_gateway()
+        self.config['overrides']['codex'] = {'model': 'gpt-5.6-sol'}
+        self.apply(('codex', 'omp'))
+        omp = M.decode((self.home/M.SETTINGS['omp']).read_text(encoding='utf-8'), '.yml')
+        self.assertEqual(omp['modelRoles']['default'], 'terminal-gateway/'+self.config['custom_gateway']['default_model'])
+        self.assertEqual(omp['modelRoles']['advisor'], 'old-provider/advisor')
+        codex = M.decode((self.home/M.SETTINGS['codex']).read_text(encoding='utf-8'), '.toml')
+        self.assertEqual(codex['model'], 'gpt-5.6-sol')
     def test_invalid_config_fails_before_mutation(self):
         self.put('.pi/agent/settings.json','invalid json')
         with self.assertRaises(ValueError):M.build_plan(self.home,self.config,M.TOOLS)
@@ -101,6 +135,34 @@ class ProfileTests(unittest.TestCase):
     def test_parent_symlink_refused(self):
         (self.home/'elsewhere').mkdir();(self.home/'.pi').symlink_to(self.home/'elsewhere')
         with self.assertRaisesRegex(ValueError,'Parent directory'):M.build_plan(self.home,self.config,('pi',))
+    @unittest.skipUnless(os.name == 'nt', 'Windows junctions')
+    def test_parent_junction_refused(self):
+        target = self.home/'elsewhere'
+        target.mkdir()
+        junction = self.home/'.codex'
+        subprocess.run(['cmd', '/d', '/c', 'mklink', '/J', str(junction), str(target)], check=True, capture_output=True)
+        try:
+            with self.assertRaisesRegex(ValueError, 'Parent directory'):
+                M.build_plan(self.home, self.config, ('codex',))
+            self.assertEqual(list(target.iterdir()), [])
+        finally:
+            junction.rmdir()
+
+    def test_updates_restore_in_reverse_order(self):
+        original = 'model = "original-model"\n'
+        target = self.put('.codex/config.toml', original)
+        self.apply(('codex',))
+        first = self.manifest()
+        self.config['overrides']['codex'] = {'model': 'gpt-5.6-sol'}
+        self.apply(('codex',))
+        second = next(path for path in first.parent.parent.glob('*/manifest.json') if path != first)
+        with self.assertRaisesRegex(ValueError, 'Changed since install'):
+            M.restore(first, self.home)
+        with contextlib.redirect_stdout(io.StringIO()):
+            M.restore(second, self.home)
+            M.restore(first, self.home)
+        self.assertEqual(target.read_text(), original)
+        self.assertFalse((self.home/'.codex/AGENTS.md').exists())
     def test_transaction_rolls_back_after_write_failure(self):
         p=self.put('.codex/config.toml','model = "before"\n')
         ops=M.build_plan(self.home,self.config,('codex',));real=M.write_op;counter=0
@@ -112,6 +174,110 @@ class ProfileTests(unittest.TestCase):
         with patch.object(M,'write_op',broken), self.assertRaises(OSError):M.apply_plan(ops,self.home,['codex'])
         self.assertEqual(p.read_text(),'model = "before"\n')
         for op in ops:self.assertEqual(M.fingerprint(op['path']),op['before'])
+    def test_manifest_write_failure_rolls_back_install(self):
+        self.put('.codex/config.toml', 'model = "before"\n')
+        ops = M.build_plan(self.home, self.config, ('codex',))
+        real = Path.write_text
+
+        def fail_manifest(path, *args, **kwargs):
+            if path.name == 'manifest.json':
+                real(path, '{', encoding='utf-8')
+                raise OSError('simulated manifest write failure')
+            return real(path, *args, **kwargs)
+
+        with patch.object(Path, 'write_text', fail_manifest), self.assertRaises(OSError):
+            M.apply_plan(ops, self.home, ['codex'])
+        for op in ops:
+            self.assertEqual(M.fingerprint(op['path']), op['before'])
+        self.assertEqual(list((self.home/'.local/state/terminal-agents').glob('*/manifest.json')), [])
+
+    def test_restore_validates_all_backups_before_mutation(self):
+        self.put('.codex/AGENTS.md', 'Original instructions\n')
+        self.put('.codex/config.toml', 'model = "before"\n')
+        self.apply(('codex',))
+        manifest_path = self.manifest()
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        row = next(row for row in manifest['files'] if row['before'].startswith('file:'))
+        saved = manifest_path.parent/row['saved']
+        original = saved.read_bytes()
+        for corrupt in (False, True):
+            with self.subTest(corrupt=corrupt):
+                if corrupt:
+                    saved.write_bytes(b'corrupted backup')
+                else:
+                    saved.unlink()
+                with self.assertRaisesRegex(ValueError, 'backup'):
+                    M.restore(manifest_path, self.home)
+                for entry in manifest['files']:
+                    self.assertEqual(M.fingerprint(Path(entry['path'])), entry['after'])
+                saved.write_bytes(original)
+
+    def test_restore_rejects_unsafe_backup_paths(self):
+        self.put('.codex/config.toml', 'model = "before"\n')
+        self.apply(('codex',))
+        manifest_path = self.manifest()
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        row = next(row for row in manifest['files'] if row['before'].startswith('file:'))
+        outside = self.put('outside-backup', 'model = "before"\n')
+        for saved in ('../outside-backup', str(outside)):
+            with self.subTest(saved=saved):
+                row['saved'] = saved
+                manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+                with self.assertRaises(ValueError):
+                    M.restore(manifest_path, self.home)
+                for entry in manifest['files']:
+                    self.assertEqual(M.fingerprint(Path(entry['path'])), entry['after'])
+
+    def test_target_paths_cannot_escape_home(self):
+        for path in (self.home, self.home/'..'/'outside', Path('relative-target')):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                M.checked_parent(path, self.home)
+
+    def test_reversed_instruction_markers_fail_before_mutation(self):
+        original = M.END+'\nKeep this policy\n'+M.BEGIN+'\n'
+        path = self.put('.codex/AGENTS.md', original)
+        with self.assertRaisesRegex(ValueError, 'Malformed'):
+            M.build_plan(self.home, self.config, ('codex',))
+        self.assertEqual(path.read_text(), original)
+        self.assertFalse((self.home/'.local').exists())
+
+    def test_utf8_files_work_without_utf8_locale(self):
+        config_path = self.put('machine.json', json.dumps(self.config))
+        original = '使用繁體中文；保留既有設定。\n'
+        entry = self.home/'.codex/AGENTS.md'
+        entry.parent.mkdir(parents=True)
+        entry.write_text(original, encoding='utf-8')
+        self.config['desktop_commands'] = {'hermes': ['C:/應用程式/Hermes.exe']}
+        config_path.write_text(json.dumps(self.config, ensure_ascii=False), encoding='utf-8')
+        script = '''
+import contextlib, io, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import manage, runtime
+home = Path(sys.argv[2])
+machine = manage.load_machine(home/'machine.json')
+with contextlib.redirect_stdout(io.StringIO()):
+    manage.apply_plan(manage.build_plan(home, machine, ('codex',)), home, ['codex'])
+assert runtime.settings(home) == machine
+assert manage.build_plan(home, machine, ('codex',)) == []
+'''
+        env = dict(os.environ, LC_ALL='C', PYTHONCOERCECLOCALE='0', PYTHONIOENCODING='utf-8')
+        result = subprocess.run(
+            [sys.executable, '-X', 'utf8=0', '-c', script, str(ROOT/'scripts/profile'), str(self.home)],
+            env=env, capture_output=True, text=True, encoding='utf-8',
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(original.strip(), entry.read_text(encoding='utf-8'))
+
+    def test_utf8_bom_is_supported_in_native_configuration(self):
+        path = self.put('machine.json', '')
+        path.write_text(json.dumps(self.config), encoding='utf-8-sig')
+        self.assertEqual(M.load_machine(path), self.config)
+        for tool, content in (('pi', '{"theme":"中文"}'), ('codex', 'model = "existing"')):
+            dest = self.home/M.SETTINGS[tool]
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content, encoding='utf-8-sig')
+        self.apply(('pi', 'codex'))
     @unittest.skipIf(os.name == 'nt', 'POSIX private file semantics')
     def test_secret_permissions_and_native_auth_isolation(self):
         self.enable_gateway()

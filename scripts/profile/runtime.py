@@ -25,7 +25,7 @@ def profile_home():
 
 def settings(home):
     # Machine edits take effect on install, so routing matches installed configs.
-    return json.loads((home/'.local/share/terminal-agents/machine.json').read_text())
+    return json.loads((home/'.local/share/terminal-agents/machine.json').read_text(encoding='utf-8-sig'))
 
 
 def read_key(home, name, env):
@@ -40,7 +40,7 @@ def read_key(home, name, env):
         raise ValueError(f'Missing {name}; use agent-run secret {name} or export it in your shell')
     if not stat.S_ISREG(p.stat().st_mode) or p.is_symlink() or p.stat().st_mode & 0o077:
         raise ValueError('secrets.json must be a private regular file (chmod 600)')
-    value = json.loads(p.read_text()).get(name)
+    value = json.loads(p.read_text(encoding='utf-8-sig')).get(name)
     if not isinstance(value,str) or not value:
         raise ValueError(f'Missing {name}; use agent-run secret {name}')
     return value
@@ -58,11 +58,11 @@ def store_key(home, name):
     p.parent.mkdir(parents=True,exist_ok=True)
     if p.is_symlink() or (p.exists() and p.stat().st_mode & 0o077):
         raise ValueError('Existing secrets.json must be a private regular file')
-    d = json.loads(p.read_text()) if p.exists() else {}
+    d = json.loads(p.read_text(encoding='utf-8-sig')) if p.exists() else {}
     d[name] = value
     fd, tmp = tempfile.mkstemp(dir=p.parent)
     try:
-        with os.fdopen(fd,'w') as f:
+        with os.fdopen(fd,'w',encoding='utf-8') as f:
             json.dump(d,f,indent=2);f.write('\n')
         os.chmod(tmp,0o600);os.replace(tmp,p)
     finally:
@@ -89,7 +89,7 @@ def executable_prefix(tool, binary, env):
         root = Path(binary).parent/'node_modules'/package
         manifest = root/'package.json'
         if node and manifest.is_file():
-            bins=json.loads(manifest.read_text()).get('bin',{})
+            bins=json.loads(manifest.read_text(encoding='utf-8-sig')).get('bin',{})
             entry=bins.get(tool) if isinstance(bins,dict) else bins
             if isinstance(entry,str):
                 script=(root/entry).resolve()

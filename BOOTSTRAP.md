@@ -7,35 +7,35 @@ Coding 工具限定 Pi、Oh My Pi、Codex Desktop（主力，CLI 偶爾）、Dee
 先準備 Git、[uv](https://docs.astral.sh/uv/getting-started/installation/)，再安裝會使用的程式。安裝器不會自動安裝或升級 agent。
 
 - Codex：優先使用 Desktop；需要 terminal 時另外安裝 CLI。
-- Pi、Oh My Pi：安裝原生 CLI，確認 `pi`、`omp` 在 PATH。
+- Pi、Oh My Pi：本人的 Windows 電腦只在 WSL Ubuntu 安裝與使用，確認 Linux 的 `pi`、`omp` 在 PATH。
 - DeepSeek Harness Desktop：使用你的 Desktop 發行版及配套 backend；本套件對應 `.dsh` 設定格式，不替換 profile 的 plugin bundles。
-- Hermes Desktop：使用你的 Desktop 發行版與其實際 `.hermes` backend home。
+- Hermes Desktop：使用你的 Desktop 發行版與其實際 backend home。本人的 Windows 安裝位於 `%LOCALAPPDATA%/hermes`，與安裝器預設的 `~/.hermes` 不同，需手動套用至實際目錄。
 
 ## 初始化與安裝
 
-macOS／Linux／WSL：
+WSL Ubuntu（Pi、Oh My Pi 與 Linux 原生 Codex 設定）：
 
 ```sh
 git clone https://github.com/yenhunghuang/my-terminal-skills.git
 cd my-terminal-skills
 ./scripts/install.sh init
-./scripts/install.sh install --agents codex,pi,omp,dsh,hermes
-./scripts/install.sh install --agents codex,pi,omp,dsh,hermes --apply
+./scripts/install.sh install --agents codex,pi,omp
+./scripts/install.sh install --agents codex,pi,omp --apply
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Windows PowerShell：
+Windows PowerShell（Codex 與 DeepSeek Harness Desktop）：
 
 ```powershell
 git clone https://github.com/yenhunghuang/my-terminal-skills.git
 Set-Location my-terminal-skills
 .\scripts\install.ps1 init
-.\scripts\install.ps1 install --agents codex,pi,omp,dsh,hermes
-.\scripts\install.ps1 install --agents codex,pi,omp,dsh,hermes --apply
+.\scripts\install.ps1 install --agents codex,dsh
+.\scripts\install.ps1 install --agents codex,dsh --apply
 $env:Path = "$HOME\.local\bin;$env:Path"
 ```
 
-若 PowerShell policy 不允許 `.ps1`，使用 `uv run --locked python scripts/profile/manage.py init` 等效入口，不需修改全域 policy。`install` 預覽，`--apply` 寫入並備份。`--agents` 可以縮短，省略則套用五個工具。
+macOS／其他 Linux 使用相同 `.sh` 入口，依實際工具調整 `--agents`。若 PowerShell policy 不允許 `.ps1`，使用 `uv run --locked python scripts/profile/manage.py init` 等效入口，不需修改全域 policy。`install` 預覽，`--apply` 寫入並備份。省略 `--agents` 會套用五個工具；安裝器目前不記住上次的工具子集，更新與 `doctor` 也要傳入同一份清單。
 
 `init` 建立 `~/.config/terminal-agents/machine.json`。`--home` 指整個帳戶 home，不是單一 agent 的 home。安裝器使用[預設路徑](agent-profile/README.md)；自訂 `CODEX_HOME`、`HERMES_HOME`、`DSH_HOME`、Pi/OMP home 或 named profiles 請依表格手動套用到實際目錄。
 
@@ -55,7 +55,9 @@ Windows Desktop 使用 Windows home；WSL terminal 使用 Linux home，兩邊分
 
 例如將 `desktop_commands.hermes` 設為 `["C:\\Apps\\Hermes\\Hermes.exe"]`，但必須換成該機器真正存在的路徑。若你的 DeepSeek Desktop 由特定啟動器開啟，使用該啟動器的 executable 與參數；本套件不把 `dsh web` 自動當成你的 Desktop。
 
-既有目標機的其他設定、登入與身份會保留。同名 skill 由本套件管理並先備份。POSIX 使用 symlink，Windows 使用副本；父目錄為 symlink 時會指出衝突。先關閉會寫入同一份設定的 app，再套用更新。
+設定合併順序為：範本補齊缺少的欄位 → 保留既有設定 → 套用已啟用的 gateway → 套用 `overrides`。更新範本不會重設已有的模型、provider、reasoning 或委派設定；要明確變更請填入 `overrides`。OMP 不再預填固定角色模型，新安裝沿用原生選擇或已配置的 gateway。
+
+既有登入與身份會保留。同名 skill 由本套件管理並先備份。POSIX 使用 symlink，Windows 使用副本；父目錄為 symlink 或 Windows junction 時會指出衝突。先關閉會寫入同一份設定的 app，再套用更新。設定與指令檔使用 UTF-8，也接受帶 BOM 的 UTF-8。
 
 ## 登入與金鑰
 
@@ -86,18 +88,18 @@ agent-run pi
 agent-run omp
 agent-run dsh                   # 已配置的 DeepSeek Harness Desktop entry
 agent-run hermes                # Hermes Desktop 助手
-./scripts/install.sh doctor
+./scripts/install.sh doctor --agents codex,pi,omp
 agent-run probe custom
-./scripts/update.sh --apply
+./scripts/update.sh --agents codex,pi,omp --apply
 ./scripts/install.sh restore --manifest /path/printed/by/install/manifest.json
 ```
 
-PowerShell 對應 `install.ps1`／`update.ps1`。額外參數會傳給所選程式；原生命令也讀取已安裝設定。
+PowerShell 對應 `install.ps1`／`update.ps1`，例如 `.\scripts\update.ps1 --agents codex,dsh --apply`。額外參數會傳給所選程式；原生命令也讀取已安裝設定。
 
 `doctor` 檢查設定漂移，以及 Pi/OMP 的 CLI 或 Desktop 啟動 entry；不要求 Codex Desktop 使用者另裝 CLI。未配置 Desktop entry 或檔案漂移會回傳非零，這不等於程式不存在。`probe custom` 僅查詢 gateway 的模型 catalog，不宣稱推論、串流或工具呼叫已通過。
 
-備份位於 `~/.local/state/terminal-agents/<install-id>/`。還原若發現安裝後的手動編輯會停止；多次更新依反向順序還原。舊版本曾裝入的範圍外設定不會自動刪除，避免損失你另行維護的內容；本版不再新增或管理它們。
+備份位於 `~/.local/state/terminal-agents/<install-id>/`。還原會在寫入前檢查所有備份、目標路徑與安裝後的變更；備份遺失、損壞或目標已手動編輯時會停止。安裝過程或安裝紀錄寫入失敗時會嘗試回復原檔。多次更新依反向順序還原。舊版本曾裝入的範圍外設定不會自動刪除，避免損失你另行維護的內容；本版不再新增或管理它們。
 
 ## 給另一個 agent 的指令
 
-> 閱讀 BOOTSTRAP.md，安裝我選用的五個工具 profile。Codex 以 Desktop 為主，Hermes 是助手。沿用既有登入，確認 Windows／WSL 與 backend 的設定位置。完成 init、install、doctor；只有缺少實際連線資料時才詢問。不要上傳 machine.json、secrets.json 或備份。
+> 閱讀 BOOTSTRAP.md，依 Windows／WSL 分工安裝我選用的工具 profile。Codex 以 Desktop 為主，Hermes 是助手。沿用既有登入，確認 backend 的實際 home；非預設位置依 agent-profile/README.md 手動套用。完成 init、install、doctor，始終使用相同的 --agents 清單；只有缺少實際連線資料時才詢問。不要上傳 machine.json、secrets.json 或備份。

@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import stat
 import sys
 import subprocess
 import tempfile
@@ -38,6 +39,15 @@ def merge(dst, patch):
     return dst
 
 
+def merge_defaults(dst, defaults):
+    for key, value in defaults.items():
+        if key not in dst:
+            dst[key] = copy.deepcopy(value)
+        elif isinstance(dst[key], dict) and isinstance(value, dict):
+            merge_defaults(dst[key], value)
+    return dst
+
+
 def decode(text, suffix):
     if not text.strip():
         return {}
@@ -63,7 +73,7 @@ def encode(data, suffix):
 
 
 def load_machine(path):
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding='utf-8-sig'))
     if not isinstance(data, dict):
         raise ValueError('machine.json must be an object')
     gateway = data.get('custom_gateway', {})
@@ -117,6 +127,8 @@ def instruction_text(old, new):
     if old.count(BEGIN) != old.count(END) or old.count(BEGIN) > 1:
         raise ValueError('Malformed managed instruction block')
     if BEGIN in old:
+        if old.index(BEGIN) > old.index(END):
+            raise ValueError('Malformed managed instruction block')
         return old[:old.index(BEGIN)] + BEGIN + '\n' + new.rstrip() + '\n' + END + old[old.index(END) + len(END):]
     if old.strip() == new.strip():
         old = ''
@@ -135,14 +147,25 @@ def fingerprint(path):
     return 'file:' + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def is_junction(path):
+    if os.name != 'nt':
+        return False
+    try:
+        return getattr(path.lstat(), 'st_reparse_tag', None) == stat.IO_REPARSE_TAG_MOUNT_POINT
+    except FileNotFoundError:
+        return False
+
+
 def checked_parent(path, home):
-    if not path.is_relative_to(home):
+    if not path.is_absolute() or path == home or '..' in path.parts or not path.is_relative_to(home):
         raise ValueError('Target must be inside the selected home')
+    if is_junction(path):
+        raise ValueError(f'Target is a junction; configure this target separately: {path}')
     for parent in path.parents:
         if parent == home:
             break
-        if parent.is_symlink():
-            raise ValueError(f'Parent directory is a symlink; configure this target separately: {parent}')
+        if parent.is_symlink() or is_junction(parent):
+            raise ValueError(f'Parent directory is a symlink/junction; configure this target separately: {parent}')
 
 
 def operation(path, data=None, link=None, mode=0o600):
@@ -152,7 +175,7 @@ def operation(path, data=None, link=None, mode=0o600):
 def build_plan(home, machine, selected):
     ops = []
     share = home / '.local/share/terminal-agents'
-    common = (PROFILE/'AGENTS.md').read_text()
+    common = (PROFILE/'AGENTS.md').read_text(encoding='utf-8-sig')
     for source in (PROFILE/'skills').rglob('*'):
         if source.is_file():
             ops.append(operation(share/'skills'/source.relative_to(PROFILE/'skills'), source.read_bytes(), mode=source.stat().st_mode & 0o777))
@@ -160,8 +183,8 @@ def build_plan(home, machine, selected):
     ops.append(operation(share/'machine.json', (json.dumps(machine, indent=2)+'\n').encode()))
     for tool in selected:
         path = home/ENTRIES[tool]
-        new = (PROFILE/'hermes/SOUL.md').read_text() if tool == 'hermes' else common
-        old = path.read_text() if path.exists() else ''
+        new = (PROFILE/'hermes/SOUL.md').read_text(encoding='utf-8-sig') if tool == 'hermes' else common
+        old = path.read_text(encoding='utf-8-sig') if path.exists() else ''
         # Keep identity outside the managed policy block, including on repeated installs.
         if tool == 'hermes':
             if not old.strip():
@@ -172,11 +195,12 @@ def build_plan(home, machine, selected):
         ops.append(operation(path, instruction_text(old, new).encode()))
         dest = home/SETTINGS[tool]
         source = PROFILE/'settings'/TEMPLATES[tool]
-        patch = decode(source.read_text(), source.suffix)
+        current = decode(dest.read_text(encoding='utf-8-sig'), dest.suffix) if dest.exists() else {}
+        merge_defaults(current, decode(source.read_text(encoding='utf-8-sig'), source.suffix))
+        patch = {}
         if machine.get('custom_gateway', {}).get('enabled') and tool in ('pi','omp','dsh','hermes'):
             gateway_patch(tool, home, machine['custom_gateway'], patch, ops)
         merge(patch, machine.get('overrides', {}).get(tool, {}))
-        current = decode(dest.read_text(), dest.suffix) if dest.exists() else {}
         merge(current, patch)
         ops.append(operation(dest, encode(current, dest.suffix).encode()))
         skills_root = {'codex':'.agents/skills', 'pi':'.pi/agent/skills', 'omp':'.omp/agent/skills', 'dsh':'.dsh/skills', 'hermes':'.hermes/skills'}[tool]
@@ -214,13 +238,13 @@ def gateway_patch(tool, home, gateway, patch, ops):
         if tool == 'omp':
             provider['authHeader'] = True
         dest = home/('.pi/agent/models.json' if tool == 'pi' else '.omp/agent/models.yml')
-        current = decode(dest.read_text(), dest.suffix) if dest.exists() else {}
+        current = decode(dest.read_text(encoding='utf-8-sig'), dest.suffix) if dest.exists() else {}
         merge(current, {'providers':{'terminal-gateway':provider}})
         ops.append(operation(dest, encode(current,dest.suffix).encode()))
         if tool == 'pi':
             patch.update(defaultProvider='terminal-gateway', defaultModel=default)
         else:
-            patch['modelRoles']['default'] = 'terminal-gateway/'+default
+            patch['modelRoles'] = {'default': 'terminal-gateway/'+default}
     elif tool == 'dsh':
         entries = []
         for model in models:
@@ -281,9 +305,11 @@ def apply_plan(ops, home, selected):
         return
     # Refuse concurrent modifications observed since the plan was built.
     for op in ops:
+        checked_parent(op['path'], home)
         if fingerprint(op['path']) != op['before']:
             raise ValueError('Target changed during planning; rerun install')
     state = home/'.local/state/terminal-agents'
+    checked_parent(state/'manifest.json', home)
     state.mkdir(parents=True,exist_ok=True); state.chmod(0o700)
     if os.name == 'nt':
         account = subprocess.check_output(['whoami'],text=True).strip()
@@ -299,18 +325,23 @@ def apply_plan(ops, home, selected):
             shutil.copytree(p,backup/saved,symlinks=True)
         rows.append({'path':str(p),'before':op['before'],'saved':saved})
     touched = []
+    manifest_path = backup/'manifest.json'
     try:
         for row, op in zip(rows,ops):
+            checked_parent(op['path'], home)
+            if fingerprint(op['path']) != op['before']:
+                raise ValueError('Target changed during installation; rerun install')
             touched.append(row)
             write_op(op)
             row['after'] = fingerprint(op['path'])
+        manifest = {'home':str(home),'agents':selected,'files':rows}
+        manifest_path.write_text(json.dumps(manifest,indent=2)+'\n', encoding='utf-8')
     except Exception:
+        manifest_path.unlink(missing_ok=True)
         for row in reversed(touched):
             restore_entry(row,backup)
         raise
-    manifest = {'home':str(home),'agents':selected,'files':rows}
-    (backup/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    print(f'Applied {len(rows)} changes. Restore manifest: {backup/"manifest.json"}')
+    print(f'Applied {len(rows)} changes. Restore manifest: {manifest_path}')
 
 
 def restore(manifest_path, home):
@@ -318,14 +349,34 @@ def restore(manifest_path, home):
     expected = home/'.local/state/terminal-agents'
     if not manifest_path.is_relative_to(expected):
         raise ValueError('Restore manifest must belong to this home profile')
-    manifest = json.loads(manifest_path.read_text())
-    if manifest['home'] != str(home):
+    checked_parent(manifest_path, home)
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
+    if not isinstance(manifest, dict) or manifest.get('home') != str(home):
         raise ValueError('Manifest belongs to another home')
-    for row in manifest['files']:
-        checked_parent(Path(row['path']),home)
-        if fingerprint(Path(row['path'])) != row['after']:
+    rows = manifest.get('files')
+    if not isinstance(rows, list):
+        raise ValueError('Invalid restore manifest files')
+    paths = set()
+    for row in rows:
+        if not isinstance(row, dict) or not all(isinstance(row.get(key), str) for key in ('path', 'before', 'after', 'saved')):
+            raise ValueError('Invalid restore manifest entry')
+        path = Path(row['path'])
+        checked_parent(path, home)
+        if path in paths or any(path in other.parents or other in path.parents for other in paths):
+            raise ValueError('Overlapping restore targets')
+        paths.add(path)
+        before = row['before']
+        if before != 'absent' and not (before.startswith('link:') and len(before) > 5) and not re.fullmatch(r'(file|dir):[0-9a-f]{64}', before):
+            raise ValueError('Invalid backup fingerprint')
+        if not re.fullmatch(r'[0-9]+', row['saved']):
+            raise ValueError('Invalid backup path')
+        if before.startswith(('file:', 'dir:')):
+            saved = manifest_path.parent/row['saved']
+            if saved.is_symlink() or is_junction(saved) or fingerprint(saved) != before:
+                raise ValueError(f'Missing or damaged backup; restore cancelled: {row["saved"]}')
+        if fingerprint(path) != row['after']:
             raise ValueError(f'Changed since install; preserve/resolve it before restore: {row["path"]}')
-    for row in reversed(manifest['files']):
+    for row in reversed(rows):
         restore_entry(row,manifest_path.parent)
     print('Restored files from this installation; unrelated files were not removed.')
 
